@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>รายการคำสั่งซื้อ | สำนักพิมพ์อมตะ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header-inner">
+      <h1 class="site-title">
+        สำนักพิมพ์อมตะ
+        <span class="site-subtitle">ระบบติดตามคำสั่งซื้อหนังสือ</span>
+      </h1>
+      <nav class="site-nav">
+        <a href="index.html" class="active">รายการคำสั่งซื้อ</a>
+        <a href="add.html">เพิ่มคำสั่งซื้อ</a>
+        <a href="summary.html">สรุปยอด</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <h2 class="page-title">รายการคำสั่งซื้อ</h2>
+    <p class="page-description">ดูคำสั่งซื้อทั้งหมดจากร้านค้า และติดตามสถานะการจัดส่งและการชำระเงิน</p>
+    <div id="saved-alert" class="alert alert-success" hidden></div>
+    <div class="toolbar">
+      <div class="search-box">
+        <label for="search">ค้นหา</label>
+        <input type="search" id="search" placeholder="พิมพ์ชื่อร้านหรือชื่อหนังสือ" autocomplete="off">
+      </div>
+      <div class="filter-group" id="status-filter" role="group" aria-label="กรองตามสถานะ"></div>
+    </div>
+    <div class="table-meta">
+      <p class="legend"><span class="legend-swatch"></span>แถวสีแดง คือรายการที่ยังไม่ชำระ และสั่งมาเกิน 30 วันแล้ว</p>
+      <p class="result-count" id="result-count"></p>
+    </div>
+    <div class="card card-flush">
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>เลขที่</th>
+              <th>ร้าน</th>
+              <th>หนังสือ</th>
+              <th class="num">จำนวน</th>
+              <th class="num">ยอดเงิน</th>
+              <th>วันที่สั่ง</th>
+              <th>สถานะ</th>
+              <th>เปลี่ยนสถานะ</th>
+            </tr>
+          </thead>
+          <tbody id="orders-body">
+            <tr><td colspan="8" class="empty">กำลังโหลดข้อมูล...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <footer class="site-footer">สำนักพิมพ์อมตะ</footer>
+
+  <script src="data.js"></script>
+  <script>
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    const body = document.getElementById('orders-body');
+    const newId = new URLSearchParams(window.location.search).get('new');
+
+    function showMessage(text) {
+      const alert = document.getElementById('saved-alert');
+      alert.textContent = text;
+      alert.hidden = !text;
+    }
+
+    function rowClass(order) {
+      if (order.id === newId) return 'row-new';
+      if (isOverdue(order)) return 'row-overdue';
+      return '';
+    }
+
+    function dateCell(order) {
+      const date = formatThaiDate(order.orderDate);
+      if (!isOverdue(order)) return date;
+      return `${date}<span class="overdue-note">ค้าง ${daysSince(order.orderDate)} วัน</span>`;
+    }
+
+    function actionCell(order) {
+      const next = NEXT_STATUS[order.status];
+      if (!next) return '<span class="done-note">เสร็จสิ้น</span>';
+      return `<button type="button" class="btn btn-small" data-id="${escapeHtml(order.id)}" data-next="${next}">
+        เปลี่ยนเป็น ${STATUS_LABELS[next]}
+      </button>`;
+    }
+
+    // ตัวกรอง: คำค้นหา และสถานะที่เลือก ('all' = ทั้งหมด)
+    const filters = { query: '', status: 'all' };
+    const searchInput = document.getElementById('search');
+    const statusFilter = document.getElementById('status-filter');
+
+    function matchesFilters(order) {
+      const query = filters.query.trim().toLowerCase();
+      const matchesQuery = !query ||
+        order.shop.toLowerCase().includes(query) ||
+        order.book.toLowerCase().includes(query);
+      const matchesStatus = filters.status === 'all' || order.status === filters.status;
+      return matchesQuery && matchesStatus;
+    }
+
+    // ปุ่มกรองสถานะ พร้อมจำนวนรายการในวงเล็บ
+    function showStatusFilter(orders) {
+      const options = [['all', 'ทั้งหมด'], ...Object.entries(STATUS_LABELS)];
+      statusFilter.innerHTML = options.map(([value, label]) => {
+        const count = value === 'all' ? orders.length : orders.filter((o) => o.status === value).length;
+        const active = filters.status === value;
+        return `<button type="button" class="filter-btn${active ? ' active' : ''}"
+          data-status="${value}" aria-pressed="${active}">${label} (${count})</button>`;
+      }).join('');
+    }
+
+    async function showOrders() {
+      const allOrders = await getOrders();
+      showStatusFilter(allOrders);
+
+      if (allOrders.length === 0) {
+        body.innerHTML = '<tr><td colspan="8" class="empty">ยังไม่มีคำสั่งซื้อ</td></tr>';
+        document.getElementById('result-count').textContent = '';
+        return;
+      }
+
+      const orders = allOrders.filter(matchesFilters);
+      document.getElementById('result-count').textContent =
+        `แสดง ${orders.length} จาก ${allOrders.length} รายการ`;
+
+      if (orders.length === 0) {
+        body.innerHTML = '<tr><td colspan="8" class="empty">ไม่พบคำสั่งซื้อที่ตรงกับการค้นหา</td></tr>';
+        return;
+      }
+
+      body.innerHTML = orders.map((order) => `
+        <tr class="${rowClass(order)}">
+          <td>${escapeHtml(order.id)}</td>
+          <td>${escapeHtml(order.shop)}</td>
+          <td>${escapeHtml(order.book)}</td>
+          <td class="num">${order.quantity.toLocaleString('th-TH')}</td>
+          <td class="num">${formatBaht(orderTotal(order))}</td>
+          <td class="nowrap">${dateCell(order)}</td>
+          <td><span class="badge badge-${order.status}">${STATUS_LABELS[order.status]}</span></td>
+          <td class="nowrap">${actionCell(order)}</td>
+        </tr>
+      `).join('');
+    }
+
+    // กดปุ่มเปลี่ยนสถานะ
+    body.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-id]');
+      if (!button) return;
+      button.disabled = true;
+      try {
+        const order = await updateOrderStatus(button.dataset.id, button.dataset.next);
+        showMessage(`เปลี่ยนสถานะคำสั่งซื้อเลขที่ ${order.id} เป็น "${STATUS_LABELS[order.status]}" เรียบร้อยแล้ว`);
+        await showOrders();
+      } catch (e) {
+        button.disabled = false;
+        showMessage('');
+        window.alert('เปลี่ยนสถานะไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      }
+    });
+
+    searchInput.addEventListener('input', () => {
+      filters.query = searchInput.value;
+      showOrders();
+    });
+
+    statusFilter.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-status]');
+      if (!button) return;
+      filters.status = button.dataset.status;
+      showOrders();
+    });
+
+    // ถ้าเพิ่งบันทึกคำสั่งซื้อใหม่ ให้แสดงข้อความและไฮไลต์แถวนั้น
+    async function init() {
+      await showOrders();
+      const orders = await getOrders();
+      if (newId && orders.some((o) => o.id === newId)) {
+        showMessage('บันทึกคำสั่งซื้อเลขที่ ' + newId + ' เรียบร้อยแล้ว (แถวสีเหลือง)');
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

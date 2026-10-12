@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>สรุปยอด | สำนักพิมพ์อมตะ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header-inner">
+      <h1 class="site-title">
+        สำนักพิมพ์อมตะ
+        <span class="site-subtitle">ระบบติดตามคำสั่งซื้อหนังสือ</span>
+      </h1>
+      <nav class="site-nav">
+        <a href="index.html">รายการคำสั่งซื้อ</a>
+        <a href="add.html">เพิ่มคำสั่งซื้อ</a>
+        <a href="summary.html" class="active">สรุปยอด</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <h2 class="page-title">สรุปยอด</h2>
+    <p class="page-description">ภาพรวมยอดขาย สถานะคำสั่งซื้อ และยอดที่ร้านค้ายังไม่ชำระ</p>
+
+    <div class="stat-grid stat-grid-2">
+      <div class="card stat">
+        <span class="stat-label">ยอดขายรวม</span>
+        <span class="stat-value" id="total-sales">-</span>
+        <span class="stat-note" id="total-orders"></span>
+      </div>
+      <div class="card stat stat-warning">
+        <span class="stat-label">ยอดค้างชำระรวม</span>
+        <span class="stat-value" id="total-unpaid">-</span>
+        <span class="stat-note" id="unpaid-note"></span>
+      </div>
+    </div>
+
+    <h3 class="section-title">จำนวนคำสั่งซื้อแยกตามสถานะ</h3>
+    <div class="stat-grid stat-grid-3" id="status-cards"></div>
+
+    <h3 class="section-title">ร้านที่มียอดสั่งซื้อสูงสุด 5 อันดับ</h3>
+    <div class="card">
+      <p class="chart-caption">ยอดเงินรวมของทุกคำสั่งซื้อ ไม่ว่าจะชำระแล้วหรือยัง</p>
+      <div class="bar-chart" id="top-shops"></div>
+    </div>
+  </main>
+
+  <div class="chart-tooltip" id="tooltip" hidden></div>
+
+  <footer class="site-footer">สำนักพิมพ์อมตะ</footer>
+
+  <script src="data.js"></script>
+  <script>
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function sumTotal(orders) {
+      return orders.reduce((sum, o) => sum + orderTotal(o), 0);
+    }
+
+    function showTotals(orders) {
+      const unpaid = orders.filter((o) => o.status !== 'paid');
+      const overdue = orders.filter(isOverdue);
+      document.getElementById('total-sales').textContent = formatBaht(sumTotal(orders));
+      document.getElementById('total-orders').textContent = `จาก ${orders.length} คำสั่งซื้อ`;
+      document.getElementById('total-unpaid').textContent = formatBaht(sumTotal(unpaid));
+      document.getElementById('unpaid-note').innerHTML =
+        `${unpaid.length} คำสั่งซื้อที่ยังไม่ชำระ` +
+        (overdue.length ? ` <strong class="text-danger">(เกิน 30 วัน ${overdue.length} รายการ)</strong>` : '');
+    }
+
+    function showStatusCards(orders) {
+      document.getElementById('status-cards').innerHTML = Object.keys(STATUS_LABELS).map((status) => {
+        const list = orders.filter((o) => o.status === status);
+        return `
+          <div class="card stat">
+            <span class="badge badge-${status}">${STATUS_LABELS[status]}</span>
+            <span class="stat-value">${list.length} <small>รายการ</small></span>
+            <span class="stat-note">${formatBaht(sumTotal(list))}</span>
+          </div>`;
+      }).join('');
+    }
+
+    // กราฟแท่งแนวนอน: ร้านที่ยอดสูงสุด 5 อันดับ
+    function showTopShops(orders) {
+      const byShop = {};
+      orders.forEach((o) => {
+        byShop[o.shop] = byShop[o.shop] || { shop: o.shop, total: 0, count: 0, unpaid: 0 };
+        byShop[o.shop].total += orderTotal(o);
+        byShop[o.shop].count += 1;
+        if (o.status !== 'paid') byShop[o.shop].unpaid += orderTotal(o);
+      });
+      const top = Object.values(byShop).sort((a, b) => b.total - a.total).slice(0, 5);
+      const max = top.length ? top[0].total : 0;
+      const chart = document.getElementById('top-shops');
+
+      if (top.length === 0) {
+        chart.innerHTML = '<p class="chart-caption">ยังไม่มีข้อมูล</p>';
+        return;
+      }
+
+      chart.innerHTML = top.map((s, i) => `
+        <div class="bar-row" tabindex="0"
+             data-shop="${escapeHtml(s.shop)}" data-total="${s.total}"
+             data-count="${s.count}" data-unpaid="${s.unpaid}">
+          <span class="bar-label">${i + 1}. ${escapeHtml(s.shop)}</span>
+          <span class="bar-track">
+            <span class="bar-fill" style="width: ${(s.total / max) * 100}%"></span>
+          </span>
+          <span class="bar-value">${formatBaht(s.total)}</span>
+        </div>
+      `).join('');
+    }
+
+    // กล่องรายละเอียดเมื่อเอาเมาส์ชี้ที่แท่ง
+    const tooltip = document.getElementById('tooltip');
+    const chart = document.getElementById('top-shops');
+
+    function showTooltip(row, x, y) {
+      tooltip.innerHTML = `
+        <strong>${escapeHtml(row.dataset.shop)}</strong>
+        <span>ยอดรวม ${formatBaht(Number(row.dataset.total))}</span>
+        <span>${row.dataset.count} คำสั่งซื้อ</span>
+        <span>ค้างชำระ ${formatBaht(Number(row.dataset.unpaid))}</span>`;
+      tooltip.hidden = false;
+      const box = tooltip.getBoundingClientRect();
+      const left = Math.min(x + 12, window.innerWidth - box.width - 8);
+      tooltip.style.left = Math.max(8, left) + 'px';
+      tooltip.style.top = (y + 16) + 'px';
+    }
+
+    chart.addEventListener('mousemove', (e) => {
+      const row = e.target.closest('.bar-row');
+      if (row) showTooltip(row, e.clientX, e.clientY);
+      else tooltip.hidden = true;
+    });
+    chart.addEventListener('mouseleave', () => { tooltip.hidden = true; });
+    chart.addEventListener('focusin', (e) => {
+      const row = e.target.closest('.bar-row');
+      if (!row) return;
+      const r = row.getBoundingClientRect();
+      showTooltip(row, r.left + r.width / 2, r.bottom - 8);
+    });
+    chart.addEventListener('focusout', () => { tooltip.hidden = true; });
+
+    async function init() {
+      const orders = await getOrders();
+      showTotals(orders);
+      showStatusCards(orders);
+      showTopShops(orders);
+    }
+
+    init();
+  </script>
+</body>
+</html>
